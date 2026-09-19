@@ -1,42 +1,20 @@
 # 공유 리포트
 
-## 화면
+[/shared 화면](../../frontend/src/pages/SharedReportPage.tsx)은 계정 로그인 없이 열 수 있지만 실제 데이터는 입력한 API Key로 조회합니다. URL에는 `resumeId` 또는 `resume_id`를 지정할 수 있으며 키 자체를 쿼리로 전달하는 계약은 아닙니다.
 
-- 라우트: `/shared`
-- 쿼리: `?resumeId=` 또는 `?resume_id=`
-- 파일: `frontend/src/pages/SharedReportPage.tsx`
+## 조회 흐름
 
-인증 없이 접근합니다. `AppShell`과 문서 검색 FAB 없이 독립 레이아웃을 사용합니다.
+1. 키와 대상 지원서 ID를 입력합니다.
+2. [getSharedResumeBundle](../../frontend/src/api/clients/chatClient.ts)이 `resume/get`으로 지원서를 확인합니다.
+3. `jd/get`, `report/get`을 조회해 JD·리포트·질문 묶음을 만듭니다.
+4. 화면에서 리포트와 질문을 검토하고 해당 문맥으로 채팅합니다.
 
-## 사용 흐름
+질문은 리포트의 `interview_question`에서 추출합니다. 키의 `authorized_resume`에 대상 지원서가 있어야 합니다. 키 자체는 다른 API의 수정·분석에도 사용 가능한 권한일 수 있으므로 이 화면의 조회 중심 UI와 토큰 전체 권한은 구분합니다.
 
-1. URL 쿼리에서 resume id를 읽거나 폼에 직접 입력합니다.
-2. 발급받은 API 키를 입력합니다.
-3. `apiClient.getSharedResumeBundle(resumeId, apiKey)`로 데이터를 조회합니다.
-4. 리포트 탭, 면접 질문, JD 요약을 확인합니다.
-5. 채팅 입력 시 report/JD/question 요약을 대화 문맥에 포함해 `sendChatMessage()`를 호출합니다.
+## 상태와 오류
 
-## 백엔드 API
+[useSharedReportSession](../../frontend/src/hooks/useSharedReportSession.ts)은 요청 취소와 이전 응답 배제, 로컬 인증 실패를 다룹니다. 공유 키 오류를 일반 계정 세션의 전역 로그아웃과 동일하게 처리하지 않습니다.
 
-모든 요청에 `X-API-Key` 헤더가 필요합니다.
+허용되지 않은 지원서, 삭제된 지원서, 리포트가 없는 지원서, 만료되거나 삭제된 키를 각각 확인합니다. 세션 쿠키가 있는 경우 서버가 세션을 우선하는 view가 있으므로 비로그인 브라우저에서도 확인합니다.
 
-| 용도 | 경로 |
-| --- | --- |
-| 지원서 조회 | `POST /api/resume/get/` `{ id }` |
-| JD 목록 | `POST /api/jd/get/` |
-| 분석 리포트 | `POST /api/report/get/` `{ resume_id }` |
-| 채팅 | `POST /api/chat/` `{ chat }` |
-
-면접 질문은 `report/get` 응답의 `interview_question` 필드에 포함됩니다. 프론트 `getSharedResumeBundle()`는 리포트 목록에서 질문 배열을 추출합니다.
-
-AuthKey의 `authorized_resume`에 해당 resume id가 포함되어 있어야 접근 가능합니다. 근거: `backend/api/views/resume_endpoints.py`, `backend/api/views/analysis_report_endpoints.py`, `frontend/src/api/clients/resumeReportClient.ts`
-
-## 검증
-
-`frontend/scripts/verify-shared-route.mjs`가 `/shared` 라우트 UI와 API 키 폼을 검증합니다.
-
-## 관련 문서
-
-- [관리자와 계정](admin-and-account.md) — AuthKey 발급
-- [API 레퍼런스](../06-api/api-reference.md)
-- [데이터 흐름](../02-architecture/data-flow.md)
+[공유 화면 테스트](../../frontend/src/pages/SharedReportPage.test.tsx)와 [검증 스크립트](../../frontend/scripts/verify-shared-route.mjs)는 화면 계약 확인용입니다. 모든 키 권한의 서버 검증을 대신하지는 않습니다.

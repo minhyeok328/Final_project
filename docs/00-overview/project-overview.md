@@ -1,27 +1,29 @@
 # 프로젝트 개요
 
-HumouR는 채용 담당자가 회사 정보, JD, 지원서, AI 분석 리포트, 면접 질문, 문서 검색 채팅을 한 흐름에서 다루도록 만든 채용 보조 시스템입니다.
+HumouR는 회사·직무·지원서 데이터를 연결해 채용 검토를 보조하는 웹 애플리케이션입니다. 입력한 JD와 체크리스트를 기준으로 지원서의 내용을 구조화하고, 리포트와 면접 질문을 제공합니다.
 
-## 핵심 구성
+## 도메인과 관계
 
-- 프론트엔드: React, Vite, TypeScript, Ant Design 기반의 운영 화면입니다. 주요 진입점은 `frontend/src/main.tsx`, 라우팅·인증 가드·전역 UI는 `frontend/src/App.tsx`, 페이지별 상태는 `frontend/src/hooks/`에 있습니다.
-- 백엔드: Django 앱 `api`가 계정, 회사 정보, JD, 체크리스트, 이력서, 분석 리포트(`interview_question` JSON 포함), API 키를 관리합니다. 설정은 `backend/config/settings.py`, URL 연결은 `backend/config/urls.py`와 `backend/api/urls.py`에 있습니다.
-- AI 분석: 지원서 분석은 `backend/common/analysis_graph.py`와 `backend/api/tasks.py`, 문서/HR 채팅은 `backend/common/chat_graph.py`, JD 작성 보조는 `backend/common/jd_chat_graph.py`가 담당합니다. 마스킹과 자기소개서 STAR 구조화는 OpenAI 또는 RunPod 경로를 선택합니다.
-- 데이터 작업: 채용공고 조건 크롤러는 `database/crawling/`, 문서 임베딩과 Pinecone 업로드 노트북은 `database/embedding/`에 있습니다.
-- 배포: GitHub Actions가 S3와 SSM으로 프론트/백엔드를 각각 EC2에 배포합니다. 배포 설정은 `.github/workflows/deploy.yml`과 `.deploy/`에 있습니다.
+계정은 회사 정보와 여러 JD를 관리합니다. JD에는 체크리스트와 지원서가 연결되고, 지원서에는 여러 분석 리포트가 저장됩니다. 면접 질문은 리포트의 JSON 필드에 포함됩니다. API Key는 특정 지원서 ID 목록을 통해 접근 범위를 제한합니다.
 
-## 주요 사용자 흐름
+실제 정의는 [모델](../../backend/api/models.py), 화면 진입점은 [App](../../frontend/src/App.tsx), API 연결은 [URL 목록](../../backend/api/urls.py)에 있습니다.
 
-1. 사용자는 로그인/회원가입 화면에서 세션을 시작합니다.
-2. 회사 정보를 입력하고 JD를 관리합니다.
-3. JD에 연결된 지원서를 등록하거나 API로 조회합니다.
-4. 지원서 분석 요청이 백엔드의 `resume/analyze/` 엔드포인트로 전달됩니다.
-5. 백엔드는 RunPod/OpenAI 마스킹·STAR 처리와 OpenAI 구조화 생성을 거쳐 리포트·면접 질문을 DB에 저장합니다.
-6. 프론트엔드는 대시보드, 분석 리포트, 채팅 화면으로 결과를 보여줍니다. 모집 공고·문항 템플릿 화면은 읽기 전용 미리보기만 제공하는 후순위 MVP입니다.
+## 실행 구성
 
-## 관련 문서
+| 구성 | 책임 | 실행 조건 |
+| --- | --- | --- |
+| React 웹 | 입력·목록·리포트·채팅 화면 | Node/npm, Django API |
+| Django API | 세션·권한·CRUD·분석 요청 | Python, SQLite 또는 MySQL |
+| Celery worker | 분석·체크리스트 작업 | Redis/Valkey와 동일한 백엔드 환경 |
+| 외부 AI | 분석·생성·벡터 검색 | OpenAI, 기능별 Pinecone·RunPod 설정 |
+| 데이터·학습 노트북 | 검색 데이터와 LoRA 실험 | 별도 입력 데이터, 학습 환경과 모델 접근권한 |
 
-- [시스템 아키텍처](../02-architecture/system-architecture.md)
-- [API 레퍼런스](../06-api/api-reference.md)
-- [프론트 API ID 매핑](../06-api/frontend-api-id-map.md)
-- [모델 파이프라인](../07-ai-modeling/model-pipeline.md)
+worker가 처음 확인될 때 사용할 수 없으면 분석을 웹 요청 안에서 실행합니다. 큐 등록 실패를 동기 실행으로 재시도하는 구조는 아닙니다.
+
+## 결과의 해석
+
+리포트는 입력 자료와 프롬프트의 영향을 받는 생성 결과입니다. 피드백 반복은 평가 점수를 참고해 출력을 보정하지만 최대 횟수에 도달하면 기준 미달 결과도 다음 단계로 전달합니다. 담당자는 등급만으로 판단하지 않고 원문·체크리스트·확인 질문을 함께 검토해야 합니다.
+
+## 구현 범위
+
+회사·JD·지원서 관리, 분석 리포트, 채팅, API Key 공유가 연결되어 있습니다. 문서 생성·결제·조직 권한 관리는 별도 완성 기능으로 취급하지 않습니다. 자세한 구분은 [현재 구현 범위](current-implementation-status.md), 실행 조건은 [개발 환경](../01-getting-started/development-environment.md)을 참고합니다.

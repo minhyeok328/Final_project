@@ -1,111 +1,76 @@
 # 실행과 운영
 
-## 백엔드 실행
+명령은 별도 터미널에서 실행합니다. 저장소 루트를 시작 위치로 가정하며, [개발 환경](development-environment.md)의 런타임과 환경 변수를 먼저 준비합니다.
 
-백엔드 진입점은 `backend/manage.py`입니다.
+## 백엔드
 
-일반적인 로컬 실행 순서:
+Windows PowerShell:
 
-```bash
+```powershell
 python -m venv backend/.venv
-# Windows: backend\.venv\Scripts\activate
-# macOS/Linux: source backend/.venv/bin/activate
-pip install -r backend/requirements.txt
-cd backend
+.\backend\.venv\Scripts\Activate.ps1
+python -m pip install -r backend/requirements.txt
+Set-Location backend
+python manage.py check
 python manage.py migrate
 python manage.py runserver 127.0.0.1:8000
 ```
 
-로컬 DB는 `IS_REMOTE_HOST`가 없을 때 `backend/db.sqlite3`를 사용합니다. 근거: `backend/config/settings.py`
+macOS/Linux에서는 가상환경 활성화 명령을 `source backend/.venv/bin/activate`로 바꿉니다. `migrate`는 DB를 변경하며, 로컬 SQLite의 기본 경로는 `backend/db.sqlite3`입니다. 새 DB에는 계정·JD·지원서가 없으므로 웹 가입과 입력 흐름으로 데이터를 준비합니다.
 
-## 프론트엔드 실행
+## 프론트엔드
 
-프론트는 `frontend/package.json` 스크립트를 사용합니다. **백엔드가 `127.0.0.1:8000`에서 실행 중이어야** API 호출이 성공합니다.
+저장소 루트에서 새 터미널을 열어 실행합니다.
 
-```bash
-cd frontend
+```powershell
+Set-Location frontend
 npm ci
 npm run dev
 ```
 
-`dev` 스크립트는 `vite --host 127.0.0.1`이며, 기본 포트는 `5173`입니다. `/api` 요청은 Vite 프록시를 통해 백엔드로 전달됩니다. 근거: `frontend/vite.config.ts`
+주소는 `http://127.0.0.1:5173`이며 포트가 사용 중이면 `strictPort` 설정으로 실패합니다. 브라우저와 API 주소에서 `localhost`와 `127.0.0.1`을 섞지 않는 편이 쿠키·CSRF 문제를 줄입니다. 백엔드 상태는 `GET /api/ping/`으로 확인할 수 있습니다.
 
-API 키 기반 접근(`/shared` 등)은 화면에서 사용자가 입력한 키를 `apiClient` 호출 시 `{ apiKey }` 옵션으로 넘깁니다. 세션 API에는 자동으로 `X-API-Key`가 붙지 않습니다. 근거: `frontend/src/api/httpClient.ts`, `frontend/src/api/httpClient.test.ts`
+## Celery worker
 
-## 검사 명령
-
-프론트:
-
-```bash
-cd frontend
-npm run lint
-npm run build
-npm run test          # Vitest 단위·통합 테스트
-npm run test:e2e      # Playwright E2E (인증 접근성·세션/API Key 보안)
-```
-
-백엔드:
+Redis 또는 Valkey가 `127.0.0.1:6379`에서 먼저 실행되어 있어야 합니다. 브로커 DB는 0, 결과 저장 DB는 1로 [설정에 고정](../../backend/config/settings.py)되어 있습니다.
 
 ```bash
 cd backend
-python manage.py check
-python manage.py test
+celery -A config worker --loglevel=info
 ```
 
-배포 워크플로는 프론트 `npm ci`/`npm run build`를 실행하고, 백엔드는 SSM으로 EC2에서 `python manage.py check`, `migrate`, `collectstatic`을 실행합니다. 로컬 `python manage.py test`는 수동 검사 명령으로 남아 있습니다. 근거: `.github/workflows/deploy.yml`
+운영 구성은 Linux systemd worker를 사용합니다. Windows 로컬에서 같은 worker 동작을 확인했다고 가정하지 않습니다. worker가 없으면 지원서·JD 분석은 동기 실행으로 진행하며 긴 요청이 발생할 수 있습니다.
 
-## 프론트 검증 스크립트
+[작업 모듈](../../backend/api/tasks.py)은 최초 worker ping 결과를 프로세스 메모리에 저장합니다. 실행 중 worker를 켜거나 끈 뒤 감지가 갱신되지 않으면 웹 프로세스를 재시작해 상태를 다시 확인합니다.
 
-`frontend/scripts/`에 API 계약과 UI 흐름 검증 스크립트가 있습니다.
+## 실패 확인
 
-| 스크립트 | 역할 |
+| 증상 | 확인할 위치 |
 | --- | --- |
-| `verify-backend-contract.mjs` | frontend 코드가 backend API 계약(경로, 필드명)을 지키는지 정적 검증 |
-| `verify-live-django-api.mjs` | 임시 SQLite DB와 Django runserver로 실제 API 시나리오 검증 |
-| `verify-auth-flow.mjs` | 로그인/회원가입/비밀번호 재설정 UI 흐름 검증 |
-| `verify-auth-text-links.mjs` | 인증 화면 보조 링크가 텍스트 링크 스타일인지 검증 |
-| `verify-admin-layout.mjs` | 관리자 화면 레이아웃 검증 |
-| `verify-admin-authkey-panel.mjs` | 관리자 AuthKey 생성·표시·복사 패널 검증 |
-| `verify-jd-create-flow.mjs` | JD 생성·삭제 UI 흐름 검증 |
-| `verify-cover-letter-save-flow.mjs` | 자기소개서 저장 UI 흐름 검증 |
-| `verify-cover-letter-selection-flow.mjs` | 자기소개서 선택·삭제 UI 흐름 검증 |
-| `verify-viewport-layout.mjs` | 뷰포트 기반 페이지 레이아웃 검증 |
-| `verify-document-chat-widget.mjs` | 문서 검색 FAB/위젯 데스크톱·모바일 검증 |
-| `verify-shared-route.mjs` | `/shared` 공유 리포트 라우트 검증 |
-| `verify-state-management-refactor.mjs` | `App.tsx`와 페이지 훅·mutation 분리 정적 검증 |
-| `verify-analysis-report-page.mjs` | 분석 리포트 화면 QA |
-| `verify-chat-context-real-data.mjs` | 채팅 컨텍스트 실데이터 연결 검증 |
-| `verify-qa-stability-fixes.mjs` | UI 안정성 회귀 검증 |
+| 화면 API 연결 실패 | Vite 프록시 대상, Django 8000 포트, 브라우저 네트워크 응답 |
+| CSRF 실패 | `/api/csrf/`, 쿠키 origin, secure 플래그와 HTTP/HTTPS 일치 |
+| 모델 분석 실패 | RunPod 설정·응답, OpenAI 접근권한, worker 로그 |
+| 검색 결과 없음 | Pinecone host, namespace 철자, metadata 필드와 적재 데이터 |
+| 대기 상태 지속 | worker 가용성 캐시, 브로커, Celery 작업 상태 |
+| 요청은 성공인데 작업 실패 | 응답 `data.status` 또는 `checklist_status`가 `fail`인지 확인 |
 
-`verify-*.mjs` 스크립트는 npm script로 등록되어 있지 않으므로, 프론트 루트에서 직접 실행합니다. Vitest(`npm run test`)와 Playwright E2E(`npm run test:e2e`)는 `package.json`에 등록되어 있습니다.
+지원서 분석 실패 시 코드에는 차감분 환불 경로가 있습니다. 큐 등록 실패는 동기 재시도 없이 실패 리포트를 반환합니다. 모든 장애 상황에서 환불이 정확히 한 번 이루어진다는 검증은 별도입니다.
 
-```bash
-cd frontend
-node scripts/verify-backend-contract.mjs
-node scripts/verify-live-django-api.mjs
+## 중지와 검증
+
+로컬 dev server와 worker는 해당 터미널에서 `Ctrl+C`로 중지합니다. 데이터베이스 파일을 삭제하는 방식으로 종료하지 않습니다. lint·빌드·단위 테스트·실제 API 검증의 구분과 명령은 [검증과 한계](../10-quality/verification-and-limitations.md), 운영 서버 점검은 [배포](../09-deployment/deployment.md)를 참고합니다.
+
+## 인터페이스 산출물 도구
+
+생성·검증 스크립트는 [scripts/interface-definition](../../scripts/interface-definition/)에 있고 결과는 기존 [outputs/interface-definition](../../outputs/interface-definition/)에 저장합니다. 웹 애플리케이션 실행과 별개인 도구입니다.
+
+두 스크립트는 Node에서 `@oai/artifact-tool`을 해석할 수 있는 별도 환경이 필요합니다. 이 의존성을 설치하는 루트 package manifest는 없으며 프론트 `npm ci`만으로 준비된다고 가정하지 않습니다. 생성기에 필요한 외부 XLSX 템플릿도 저장소에 포함되어 있지 않습니다.
+
+저장소 루트에서 실제 템플릿 경로를 첫 번째 인자로 전달합니다.
+
+```powershell
+node scripts/interface-definition/build_interface_definition.mjs "<외부 XLSX 템플릿 경로>"
+node scripts/interface-definition/verify_interface_definition.mjs
 ```
 
-수동 인수 테스트와 변경 범위별 스크립트 선택 방법은 [프론트엔드 운영·검증 가이드](../../frontend/README.md)를 참고하세요.
-
-## 문서 검색 위젯 QA 스크립트
-
-`frontend/scripts/verify-document-chat-widget.mjs`는 Vite dev server를 띄운 뒤 Playwright Core와 로컬 Chrome/Edge 실행 파일로 데스크톱/모바일 문서 검색 위젯을 검증합니다.
-
-검증 내용:
-
-- 가로 오버플로우 없음
-- FAB과 위젯이 우측 하단에 고정됨
-- 추천 패널 표시와 내용 확인
-- 채팅 창이 단일 스크롤 컨테이너를 사용함
-- 스크린샷을 `frontend/qa-screenshots/`에 저장
-
-환경 변수:
-
-- `VERIFY_PORT`: 기본 `5176`
-- `PLAYWRIGHT_CHROMIUM_EXECUTABLE`: Chrome/Edge 자동 탐색이 실패할 때 사용
-
-## 관련 문서
-
-- [프론트엔드 디자인 시스템](../03-frontend/design-system.md)
-- [배포와 인프라](../09-deployment/deployment.md)
-- [프론트엔드 운영·검증 가이드](../../frontend/README.md)
+입력 인자를 생략하면 현재 작업 폴더의 `인터페이스정의서_템플릿.xlsx`를 찾습니다. 출력 경로는 스크립트 위치를 기준으로 계산하므로 다른 작업 폴더에서 실행해도 같은 저장소의 `outputs/interface-definition/`을 사용합니다. 생성 명령은 기존 XLSX·미리보기를 덮어쓸 수 있습니다. 폴더 정리 과정에서는 생성·검증 도구를 실행하거나 기존 산출물을 다시 만들지 않았습니다.

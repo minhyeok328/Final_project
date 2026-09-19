@@ -1,108 +1,29 @@
 # 데이터 수집과 임베딩
 
-이 폴더는 Django 런타임 DB 마이그레이션이 아니라, 채용 조건 데이터와 앱 사용법 RAG용 임베딩을 준비하는 보조 작업입니다.
+이 영역은 서비스 DB migration과 분리된 오프라인 데이터 준비 코드입니다. 웹을 시작해도 수집·임베딩·Pinecone 적재가 자동으로 실행되지 않습니다.
 
-## 채용공고 크롤러
+## 채용 조건 수집
 
-위치: `database/crawling/`
+[crawling](../../data-pipeline/crawling/)에는 Catch, JobKorea, Jobplanet, Jumpit, Linkareer, OKKY, Rallit, Wanted별 Python 수집기가 있습니다. API·HTML·JSON-LD·Next.js payload 등 사이트별 구조를 해석합니다. 외부 사이트의 현재 응답과 수집 성공 여부는 별도 확인이 필요합니다.
 
-사이트별 스크립트:
+공통 `ConditionRow`는 `site`, `company`, `position_id`, `title`, `url`, `condition_type`, `item_order`, `condition`을 기록합니다. 출력은 `job_conditions.csv`, `qualification_requiremnets.csv`, `job_preferred_conditions.csv`입니다. 가운데 파일명은 실제 코드의 오탈자를 유지합니다.
 
-| 파일 | 사이트 | 입력 방식 |
-| --- | --- | --- |
-| `catch_scraper.py` | Catch | API와 HTML/JSON-LD |
-| `jobkorea_scraper.py` | JobKorea | 리스트 HTML과 JSON-LD |
-| `jobplanet_scraper.py` | Jobplanet | React Query payload |
-| `jumpit_scraper.py` | Jumpit | Saramin Jumpit API |
-| `linkareer_scraper.py` | Linkareer | GraphQL과 Next.js `__NEXT_DATA__` |
-| `okky_scraper.py` | OKKY Jobs | OKKY API와 HTML section parsing |
-| `rallit_scraper.py` | Rallit | 고정 URL 목록과 Next.js `__NEXT_DATA__` |
-| `wanted_scraper.py` | Wanted | Wanted API |
+각 수집기의 `normalize_title()`은 개발·데이터·AI·인프라·QA 등 직무명을 정리합니다. 규칙이 파일별로 중복되어 있어 새 분류를 추가할 때 전체 수집기를 함께 대조해야 합니다.
 
-## 공통 출력
+## 검색 데이터 준비
 
-각 크롤러는 동일한 `ConditionRow` 구조를 CSV로 저장합니다.
+[조건 CSV 생성](../../data-pipeline/crawling/pinecone/create_hire_query_csv.ipynb)과 [조건 적재](../../data-pipeline/crawling/pinecone/upload_query_to_pinecone_colab.ipynb)는 JD 체크리스트용 데이터를 준비합니다. 런타임은 `qualify_conditions`, `preffered_conditions` namespace의 `metadata.condition`을 사용합니다.
 
-필드:
+[매뉴얼 임베딩](../../data-pipeline/embedding/chunk_embedding.ipynb)은 입력 CSV의 `content`, `feature`를 읽습니다. 문자 1000개, 겹침 120개 기준으로 청킹하고 OpenAI `text-embedding-3-small`로 임베딩합니다. 배치는 100이며 float32 벡터를 base64 BLOB로 저장해 `result.csv`를 만듭니다.
 
-- `site`
-- `company`
-- `position_id`
-- `title`
-- `url`
-- `condition_type`: `qualification` 또는 `preferred`
-- `item_order`
-- `condition`
+[매뉴얼 적재](../../data-pipeline/embedding/pinecone_uploader.ipynb)는 `content`, `feature`, `index`, `blob` 열을 읽고 벡터 ID를 `{feature}_{index}`로 만듭니다. metadata에는 BLOB 외 열을 저장합니다. `PINECONE_NAMESPACE` 기본값은 `user_manual`입니다.
 
-출력 파일:
+## 실행 위치
 
-- `job_conditions.csv`
-- `qualification_requiremnets.csv`
-- `job_preferred_conditions.csv`
+수집기는 각 파일의 `__file__` 기준으로 같은 `data-pipeline/crawling/` 디렉터리에 CSV를 저장합니다. 매뉴얼 임베딩·적재 노트북은 `Path.cwd()` 기준이므로 `data-pipeline/embedding/`을 작업 디렉터리로 열고 `input.csv` 또는 `result.csv`를 준비합니다. 폴더 이동으로 입력 데이터나 원격 인덱스가 생성되지는 않습니다.
 
-주의: `qualification_requiremnets.csv`는 코드상 오타가 포함된 실제 파일명입니다. 근거: `database/crawling/*_scraper.py`
+## 실행 전 확인
 
-## 직무명 정규화
+입력 CSV, 노트북의 설치 셀과 경로, OpenAI/Pinecone 환경 변수, 대상 인덱스·namespace를 먼저 확인합니다. 노트북에 보존된 출력·개수는 과거 실행 산출물이며 현재 원격 인덱스 상태를 나타내지 않습니다. 입력 데이터와 모델 가중치가 모두 저장소에 포함되어 있다고 가정하지 않습니다.
 
-각 크롤러는 사이트별 title/category/skill 텍스트를 기반으로 다음 계열로 정규화합니다.
-
-- 프론트엔드 개발자
-- 백엔드 개발자
-- 풀스택 개발자
-- 모바일 앱 개발자
-- DevOps 엔지니어 / 인프라 엔지니어
-- 데이터 엔지니어 / 데이터 분석가
-- AI 엔지니어 / 머신러닝 엔지니어
-- QA 엔지니어 / 테스트 엔지니어
-- 보안 엔지니어
-- 게임/그래픽스 개발자
-
-정규화 규칙은 각 파일의 `normalize_title()`에 중복 구현되어 있습니다.
-
-## 임베딩 노트북
-
-위치: `database/embedding/`
-
-### `chunk_embedding.ipynb`
-
-역할:
-
-1. `input.csv` 로드
-2. 필수 컬럼 `content`, `feature` 확인
-3. 텍스트 정규화
-4. 문자 기준 청킹
-5. `text-embedding-3-small`로 임베딩 생성
-6. float32 벡터를 base64 BLOB로 저장
-7. `result.csv` 출력
-
-주요 설정:
-
-- `CHUNK_SIZE = 1000`
-- `CHUNK_OVERLAP = 120`
-- `EMBEDDING_BATCH_SIZE = 100`
-
-### `pinecone_uploader.ipynb`
-
-역할:
-
-1. `result.csv` 로드
-2. 필수 컬럼 `content`, `feature`, `index`, `blob` 확인
-3. base64 BLOB를 float32 벡터로 복원
-4. vector id를 `{feature}_{index}`로 생성
-5. metadata에 BLOB 외 모든 컬럼 저장
-6. Pinecone index에 batch upsert
-
-환경 변수:
-
-- `PINECONE_API_KEY`
-- `PINECONE_HOST`
-- `PINECONE_NAMESPACE`, 기본값 `user_manual`
-
-## 런타임과의 연결
-
-채팅의 앱 사용법 RAG는 `backend/common/chat_agent.py`에서 Pinecone namespace `user_manual`을 검색합니다. 임베딩 노트북이 만드는 metadata의 `content`가 답변 근거 문서로 사용됩니다.
-
-## 관련 문서
-
-- [검색과 저장소](../07-ai-modeling/retrieval-and-storage.md)
-- [문서 검색 채팅](../08-features/document-chat.md)
+임베딩은 외부 호출 비용을 발생시키고 upsert는 원격 벡터를 추가·덮어씁니다. 개발 서버 기동 절차에 섞지 않고 필요한 데이터 준비 작업으로 별도 수행합니다. [검색 계약](../07-ai-modeling/retrieval-and-storage.md)을 기준으로 metadata와 namespace를 맞춥니다.

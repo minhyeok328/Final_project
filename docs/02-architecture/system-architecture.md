@@ -1,67 +1,33 @@
 # 시스템 아키텍처
 
-## 전체 구조
-
 ```mermaid
-flowchart LR
-  User["채용 담당자"] --> Frontend["React/Vite 프론트엔드"]
-  Frontend --> Api["Django API"]
-  Api --> DB["SQLite 또는 MySQL"]
-  Api --> Report["LangGraph 분석·검증"]
-  Api --> ChatGraph["LangGraph 채팅"]
-  ChatGraph --> Pinecone["Pinecone user_manual"]
-  ChatGraph --> OpenAI["OpenAI Chat/Embedding"]
-  Report --> OpenAI
-  Report --> RunPod["RunPod 마스킹·STAR"]
-  Crawlers["database/crawling"] --> Csv["CSV 조건 데이터"]
-  Notebooks["database/embedding"] --> Pinecone
+flowchart TB
+  Browser[React 브라우저] -->|동일 origin /api| API[Django view]
+  API <--> DB[SQLite 또는 MySQL]
+  API -->|worker 가용| Queue[Redis / Celery]
+  API -->|worker 미가용| Task[동기 작업]
+  Queue --> Task
+  Task --> Graph[LangGraph]
+  Graph --> OpenAI[OpenAI 생성·임베딩]
+  Graph --> RunPod[RunPod 마스킹·STAR]
+  Graph --> Pinecone[Pinecone 검색]
+  Prepare[수집·임베딩 노트북] --> Pinecone
 ```
 
-## 프론트엔드 계층
+## 요청 계층
 
-- `frontend/src/main.tsx`: React 앱 마운트, Router, Query Provider 연결
-- `frontend/src/App.tsx`: 라우트 분기, 테마, 전역 알림·로딩, 인증 가드, `DocumentChatProvider`
-- `frontend/src/hooks/`: TanStack Query 기반 페이지 데이터·mutation·채팅 컨텍스트
-- `frontend/src/api/httpClient.ts`: Axios, CSRF, credentials, `X-API-Key`, 인증 만료·요청 취소 처리
-- `frontend/src/api/clients/`: 인증·회사/AuthKey·JD/체크리스트·지원서/리포트·채팅 도메인별 API와 응답 파싱
-- `frontend/src/api/backendClient.ts`: 기존 `apiClient` import를 유지하는 공개 호환 façade
-- `frontend/src/api/services/dashboardSource.ts`: account/company/JD/resume/report 원천 데이터를 조합
-- `frontend/src/api/appDataService.ts`: 대시보드 원천 데이터를 각 화면용 모델로 조립
-- `frontend/src/api/adapters/`: 백엔드 응답 스키마를 화면 표시 모델로 변환 (`adapters.ts`는 re-export façade)
-- `frontend/src/pages/`: 화면 단위 구성
-- `frontend/src/components/`: 레이아웃, 차트, 채팅, 도메인 패널
+개발 중에는 [Vite](../../frontend/vite.config.ts)가 API를 프록시하고, 배포 구성에서는 [프론트 Nginx](../../.deploy/frontend.conf)가 백엔드 Nginx로 전달합니다. React Router의 직접 URL 접근은 정적 서버의 `index.html` fallback이 필요합니다.
+
+프론트 데이터 경계는 `httpClient → clients → backendSchemas → adapters → page hooks`입니다. [HTTP 클라이언트](../../frontend/src/api/httpClient.ts)가 CSRF·쿠키·API Key·인증 만료를 처리하며 [Zod 스키마](../../frontend/src/api/backendSchemas.ts)가 응답을 검사합니다.
 
 ## 백엔드 계층
 
-- `backend/config/settings.py`: Django 설정, DB 선택, CORS/CSRF, 커스텀 유저 모델
-- `backend/config/urls.py`: `/admin/`, `/api/` 루트 연결
-- `backend/api/models.py`: 도메인 모델과 `to_dict()` 직렬화
-- `backend/api/views/`: 도메인별 POST 기반 API 핸들러 (`account_endpoints.py`, `resume_endpoints.py` 등)
-- `backend/common/analysis_graph.py`: 마스킹, STAR 구조화, 적합도 판정, 질문·리포트 생성과 품질 검증을 연결하는 운영 그래프
-- `backend/common/analysis_agent.py`: 구조화 출력 기반 적합도·면접 질문·리포트 생성
-- `backend/common/feedback_graph.py`: 생성 결과를 최대 3회 평가·보정
-- `backend/common/masking.py`, `star_analysis.py`: OpenAI/RunPod 실행 경로 선택
-- `backend/common/jd_chat_graph.py`: 회사/JD 누락 필드를 대화로 수집하고 저장
-- `backend/api/tasks.py`: Celery 작업과 동기 fallback으로 분석 리포트 저장
-- `backend/common/chat_graph.py`: 채팅 그래프 오케스트레이션
-- `backend/common/chat_agent.py`: HR 데이터 검색 tool, Pinecone 앱 매뉴얼 검색, 응답 생성
-- `backend/common/utils.py`: `backend/.env` 로드와 중첩 데이터 마스킹·복원
+[Django URL](../../backend/api/urls.py)은 함수형 view로 연결됩니다. view는 소유권·입력 필드를 확인하고 ORM 모델의 `to_dict()`를 응답합니다. 별도 DRF serializer나 자동 OpenAPI 생성 구성은 없습니다.
 
-## 데이터 작업 계층
+[작업 모듈](../../backend/api/tasks.py)은 DB 입력 수집, 작업 상태 변경, 그래프 실행, 결과 저장과 실패 환불을 담당합니다. Celery 유무와 관계없이 동일한 작업 함수를 사용합니다. 지원서 분석 view 자체는 동기 함수이고 일반 채팅 view는 async 함수입니다.
 
-- `database/crawling/*_scraper.py`: 채용 사이트별 공고 조건 수집 후 공통 CSV 출력
-- `database/embedding/chunk_embedding.ipynb`: 문서 청크화와 OpenAI 임베딩 생성
-- `database/embedding/pinecone_uploader.ipynb`: 임베딩 BLOB를 Pinecone 벡터로 업로드
+## AI와 저장소 경계
 
-## 배포 계층
+[분석 그래프](../../backend/common/analysis_graph.py)는 마스킹·STAR·판정·질문·리포트 순서를 연결합니다. [채팅 그래프](../../backend/common/chat_graph.py)는 HR 데이터와 매뉴얼 검색 분기를 합칩니다. 관계형 DB의 업무 데이터와 Pinecone의 참고 조건·매뉴얼 데이터는 별도 저장소입니다.
 
-- `.github/workflows/deploy.yml`: `dev` 브랜치 push 또는 수동 실행 시 프론트/백엔드 배포
-- `.deploy/frontend.conf`: 프론트 EC2의 nginx 정적 파일 라우팅
-- `.deploy/backend.conf`: 백엔드 EC2의 nginx reverse proxy
-- `.deploy/gunicorn.service`: Django WSGI를 `127.0.0.1:8000`에서 실행하는 systemd unit
-- `.deploy/celery.service`: Valkey/Redis broker를 사용하는 Celery worker systemd unit
-
-## 관련 문서
-
-- [데이터 흐름](data-flow.md)
-- [배포와 인프라](../09-deployment/deployment.md)
+`data-pipeline/`와 `llm/`의 노트북은 서비스 실행 시 자동 실행되지 않습니다. RunPod 모델도 웹 API 배포와 별도로 준비해야 합니다. 데이터와 모델 준비 절차는 [AI 문서](../07-ai-modeling/README.md), 운영 네트워크는 [배포](../09-deployment/deployment.md)에 있습니다.

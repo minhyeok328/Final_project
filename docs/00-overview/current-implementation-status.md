@@ -1,63 +1,31 @@
 # 현재 구현 범위
 
-이 페이지는 실제 코드 기준으로 구현 완료, UI 보존·백엔드 미연동, 검증 필요 영역을 분리합니다.
+이 페이지는 저장소 코드의 연결 상태를 설명합니다. 배포·외부 모델 가동 여부나 전체 기능의 실행 성공을 의미하지 않습니다.
 
-## 구현되어 있는 영역
+## 연결된 기능
 
-- Django 모델과 CRUD성 API: `backend/api/models.py`, `backend/api/views/`, `backend/api/urls.py`
-- 세션 기반 인증과 일부 API 키 기반 접근: `backend/api/views/account_endpoints.py` 등 도메인별 endpoint 모듈
-- JD별 체크리스트 CRUD: `Checklist` 모델, `backend/api/views/checklist_endpoints.py`
-- JD 기반 비동기 AI 체크리스트 생성과 상태 추적: `jd_analyze` in `backend/api/views/job_description_endpoints.py`, `backend/common/checklist_graph.py`, `JobDescription.checklist_status`
-- 지원서 분석 저장 흐름: `resume_analyze` in `backend/api/views/resume_endpoints.py`, `analyze_and_save_report`/`enqueue_report_analyze` in `backend/api/tasks.py`
-- LangGraph 리포트/면접질문 생성 파이프라인: `backend/common/analysis_graph.py`, `analysis_agent.py`, `feedback_graph.py`
-- OpenAI/RunPod 이중 경로 마스킹·STAR 구조화: `backend/common/masking.py`, `star_analysis.py`, `runpod/`
-- 모델 학습·평가 노트북: `llm/train_star_masking/`, `llm/eval/`
-- JD 작성 보조 채팅과 자동 필드 반영: `POST /api/jd_chat/`, `backend/common/jd_chat_graph.py`, `frontend/src/components/jd/JdChatDrawer.tsx`
-- 분석 리포트 버전·사용자 평가·검토 메모: `AnalysisReport.version`, `user_feedback`, `review_text`
-- LangGraph 기반 채팅 의도 분류와 응답 병합: `backend/common/chat_graph.py`, `backend/common/chat_agent.py`
-- React 화면, 라우팅, 전역 알림/로딩: `frontend/src/App.tsx`
-- 페이지별 데이터·mutation 훅: `frontend/src/hooks/` (`useJdPageData`, `useCoverLetterPageData`, `useAnalysisReportPageData`, `useChatPageData`, `useAdminPageData`, `useDocumentChatState`, `hooks/mutations/*`)
-- 지원서 선택·삭제 UI: `CoverLetterUploadPanel`, `CoverLetterDeleteModal`, `useCoverLetterPageData`의 `selectedResumeId`
-- 뷰포트 고정 레이아웃(`viewport-page`): 주요 보호 화면 8개, `verify-viewport-layout.mjs`로 QA
-- 전역 알림 토스트: `frontend/src/components/common/FloatingAlert.tsx`
-- 인증 페이지 분리: `frontend/src/pages/auth/`, barrel `frontend/src/pages/AuthPages.tsx`
-- 데스크톱 사이드바 핀 고정: `frontend/src/components/layout/SidebarNav.tsx`
-- 프론트 Django API 계층: 전송·CSRF·인증 만료 처리는 `frontend/src/api/httpClient.ts`, 도메인 호출·응답 파싱은 `frontend/src/api/clients/`, 공개 호환 façade는 `frontend/src/api/backendClient.ts`
-- 문서 채팅 참조 데이터 조합: `frontend/src/components/chat/chatContextData.tsx`
-- 대시보드 원천 조회와 화면 어댑터: `frontend/src/api/services/dashboardSource.ts`, `frontend/src/api/appDataService.ts`, `frontend/src/api/adapters/` (`adapters.ts`는 re-export façade)
-- Vite dev server `/api` 프록시: `frontend/vite.config.ts` → `http://127.0.0.1:8000`
-- 공유 리포트 화면(API 키 + resume id): `frontend/src/pages/SharedReportPage.tsx`
-- 관리자 AuthKey CRUD: `frontend/src/pages/AdminPage.tsx` → `/api/authkey/*`
-- S3/SSM 기반 EC2 배포 워크플로: `.github/workflows/deploy.yml`, `.deploy/frontend.conf`, `.deploy/backend.conf`, `.deploy/gunicorn.service`, `.deploy/celery.service`
-- 프론트 Vitest 단위·통합 테스트: `frontend/src/**/*.test.{ts,tsx}`, MSW 설정 `frontend/src/test/`
-- 프론트 Playwright E2E·접근성·인증 보안: `frontend/tests/e2e/auth-accessibility.spec.ts`, `auth-security.spec.ts`
-- API 응답 Zod 검증: `frontend/src/api/backendSchemas.ts` → `frontend/src/api/clients/`
+| 영역 | 구현 | 근거 |
+| --- | --- | --- |
+| 인증·계정 | 가입, 로그인, 질문 기반 복구, 프로필 변경·탈퇴 | [계정 view](../../backend/api/views/account_endpoints.py) |
+| 회사·JD | CRUD, JD 대화형 필드 반영, 체크리스트 생성 | [JD view](../../backend/api/views/job_description_endpoints.py), [채팅 view](../../backend/api/views/chat_endpoints.py) |
+| 지원서·리포트 | CRUD, 분석 작업, 질문·평가·메모 저장 | [지원서 view](../../backend/api/views/resume_endpoints.py), [작업](../../backend/api/tasks.py) |
+| 공유 | 허용 지원서 목록, 키 크레딧, 공유 조회 | [AuthKey view](../../backend/api/views/auth_key_endpoints.py), [공유 화면](../../frontend/src/pages/SharedReportPage.tsx) |
+| AI | 분석·체크리스트·채팅 LangGraph, RunPod handler | [AI 문서](../07-ai-modeling/README.md) |
+| 배포 | EC2 대상 S3·SSM 워크플로 | [배포 구성](../../.github/workflows/deploy.yml) |
 
-## UI 보존·백엔드 미연동 영역
+## 제한된 구현
 
-- 후순위 MVP 라우트(`/recruitment-post`, `/cover-letter-template`)는 nav에서 숨기지만, 계정 세션으로 직접 접근하면 실데이터 기반 읽기 전용 미리보기를 표시합니다. 근거: `frontend/src/data/appConfig.tsx`의 `mvpStatus: 'planned'`, `visibleInNav: false`, `frontend/src/components/routing/ProtectedRouteContent.tsx`
-- 모집 공고 생성/PDF, 자기소개서 문항 생성/다운로드 버튼은 비활성 상태이며 준비 중 tooltip을 표시합니다. 대응 백엔드 엔드포인트와 `apiClient` 메서드는 없습니다. 근거: `frontend/src/pages/RecruitmentPostPage.tsx`, `frontend/src/pages/CoverLetterTemplatePage.tsx`
-- 관리자 화면의 LLM 포인트, 면접방, 비밀번호 정책, LLM 사용 로그 일부는 `AdminData`와 화면 내부 계산을 사용합니다. AuthKey CRUD만 실제 API와 연결됩니다. 근거: `frontend/src/api/adapters/admin.ts`, `frontend/src/pages/AdminPage.tsx`
-- 모집 공고 미리보기는 `mapRecruitmentPreview()`가 회사/JD 필드로 프론트에서 조합합니다. 근거: `frontend/src/api/adapters/recruitment.ts`, `frontend/src/api/appDataService.ts`
+- `/recruitment-post`, `/cover-letter-template`는 메뉴에서 숨긴 미리보기입니다. 생성·다운로드 API가 없습니다.
+- 관리자 크레딧 충전·구독 연장은 `account/modify`로 값을 변경합니다. 결제 승인·정산·사용량 원장과 연결되지 않습니다.
+- 조직·멤버 권한과 면접방을 관리하는 별도 데이터 모델은 없습니다.
+- 일반 개발 화면은 Django API를 사용합니다. `.env.example`의 `VITE_USE_MOCK_API`는 현재 코드에서 읽지 않습니다.
 
-## 주의할 실제 이름
+## 개발 시 주의할 차이
 
-- 비밀번호 질문 라우트는 코드상 `passqestion/`입니다. 근거: `backend/api/urls.py`, `frontend/src/api/clients/authAccountClient.ts`
-- 지원서 분석 라우트는 `resume/analyze/`입니다. 프론트 `resumeReportClient.ts`도 이 경로를 호출합니다. 근거: `backend/api/urls.py`, `frontend/src/api/clients/resumeReportClient.ts`
-- 면접 질문은 `AnalysisReport.interview_question` JSON 필드에 저장됩니다. `question/get`, `question/modify` 엔드포인트는 제거되었고, 프론트는 `getReportQuestions()`로 리포트 응답에서 질문 배열을 만듭니다. 근거: `backend/api/models.py`, `backend/api/urls.py`, `frontend/src/api/clients/clientCore.ts`
-- Resume 모델 필드는 코드상 `self_intoduction`입니다. 근거: `backend/api/models.py`, `frontend/src/data/backendTypes.ts`
-- 크롤러 출력 파일명은 코드상 `qualification_requiremnets.csv`입니다. 근거: `database/crawling/*_scraper.py`
+- 지원서 분석 API에는 기존 처리 중 리포트의 중복 요청 차단이나 체크리스트 존재 선검증이 없습니다. 화면의 차단 로직을 서버 보장으로 해석하면 안 됩니다.
+- 큐 등록 실패는 `error:false`와 `status:fail`을 함께 반환할 수 있습니다. 성공 envelope와 작업 완료를 구분합니다.
+- 리포트 조회는 단건 ID로 조회해도 배열입니다. 현재 프론트는 `getReportsForResumeRaw()`에서 Zod로 배열을 파싱합니다.
+- API Key는 조회뿐 아니라 일부 수정·삭제·분석 API도 허용합니다. 읽기 전용 토큰이 아닙니다.
+- 모델·인덱스·원격 서버는 저장소 밖의 자원입니다. 현재 접근 가능 여부는 이 문서 작업에서 확인하지 않았습니다.
 
-## 검증 필요
-
-- 실제 OpenAI/Pinecone 환경 변수와 인덱스 스키마는 로컬 `.env` 또는 운영 환경에 의존합니다.
-- `report/get` 백엔드 응답은 리스트를 반환하지만 프론트 `getReportsForResume()`는 빈 배열 fallback을 사용합니다. 근거: `backend/api/views/analysis_report_endpoints.py`, `frontend/src/api/clients/resumeReportClient.ts`
-- Django 테스트 파일은 현재 별도 테스트 모듈로 보이지 않습니다. 배포 워크플로는 서버에서 `python manage.py check`, `migrate`, `collectstatic`을 실행하지만 `python manage.py test`는 실행하지 않습니다. 근거: `.github/workflows/deploy.yml`
-- `frontend/.env.example`의 `VITE_USE_MOCK_API`는 현재 프론트 소스에서 참조하지 않습니다. mock API 모드는 제거된 상태입니다.
-- STAR RunPod 호출은 endpoint 미설정·전송 오류·비정상 응답에서 OpenAI로 폴백합니다. 마스킹 RunPod 호출은 HTTP 비정상 응답에서는 폴백하지만 endpoint 미설정과 `requests` 전송 예외를 별도로 처리하지 않아 운영 보강이 필요합니다. 근거: `backend/common/star_analysis.py`, `backend/common/masking.py`
-
-## 관련 문서
-
-- [프론트엔드 운영·검증 가이드](../../frontend/README.md) — 수동 인수 테스트와 시나리오별 검증 상세
-- [프론트 API ID 매핑](../06-api/frontend-api-id-map.md)
-- [실행과 운영](../01-getting-started/run-and-operations.md)
+상세 제약과 검증 절차는 [검증과 한계](../10-quality/verification-and-limitations.md)에 있습니다.

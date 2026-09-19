@@ -1,108 +1,25 @@
 # 지원서 분석
 
-## 지원서 입력 화면
+## 입력과 선택
 
-화면: `/cover-letter`
+[CoverLetterPage](../../frontend/src/pages/CoverLetterPage.tsx)는 JD와 지원서를 선택하고 지원자 정보·자기소개 문항 등을 저장합니다. [useCoverLetterPageData](../../frontend/src/hooks/useCoverLetterPageData.ts)는 선택·신규 작성 상태를 관리합니다. 수정·삭제는 [useResumeMutations](../../frontend/src/hooks/mutations/useResumeMutations.ts)가 처리합니다.
 
-파일:
+화면은 체크리스트 조회 중·오류·항목 없음, 권한과 크레딧 상태에 따라 분석 버튼을 제한합니다. 서버의 `resume_analyze`에는 같은 체크리스트 선검사와 중복 분석 차단이 없으므로 화면 제한을 API 계약으로 확대하지 않습니다.
 
-- `frontend/src/pages/CoverLetterPage.tsx`
-- `frontend/src/components/cover-letter/CoverLetterInputPanel.tsx`
-- `frontend/src/components/cover-letter/CoverLetterUploadPanel.tsx`
-- `frontend/src/components/cover-letter/CoverLetterDeleteModal.tsx`
+## 작업과 비용
 
-역할:
+`resume/analyze`에 지원서 `id`를 보내면 새 리포트가 생성됩니다. 비용은 계정 또는 키에서 100 크레딧이며 세션 계정의 구독 만료 시각이 미래이면 계정 차감을 생략합니다. 실패 경로에는 환불 처리가 있습니다.
 
-- JD 선택 (`selectedJdId`)
-- 지원서 목록에서 행 선택 (`selectedResumeId`, `CoverLetterUploadPanel`)
-- 지원자명과 자기소개 문항/답변 확인·편집 (`CoverLetterInputPanel`)
-- 신규 작성 모드(`isCreatingCoverLetter`)와 기존 지원서 수정 모드 분리
-- 지원서 추가·수정·삭제 (`useResumeMutations` → `addResume`, `saveResume`, `deleteResume`)
-- 삭제 확인 모달 (`CoverLetterDeleteModal`) — 삭제 후 선택 id를 인접 항목으로 재지정
-- 분석 요청
-- 분석 요청 후 `/analysis-report?reportId=...`로 이동
+응답의 리포트 상태는 `onqueue`, `processing`, `done`, `fail`입니다. 큐 사용 시 즉시 대기 리포트를 받을 수 있고 동기 실행에서는 요청 시간이 길어집니다. queue 등록 실패의 `error:false`를 분석 성공으로 취급하지 않습니다. [저장·실패 흐름](../04-backend/analysis-pipeline.md)을 참고합니다.
 
-선택 상태는 `useCoverLetterPageData`가 관리합니다. override가 없으면 첫 JD·첫 지원서를 기본 선택합니다. 근거: `frontend/src/hooks/useCoverLetterPageData.ts`, `frontend/src/pages/CoverLetterPage.tsx`
+## 리포트 검토
 
-## 분석 요청
+[AnalysisReportPage](../../frontend/src/pages/AnalysisReportPage.tsx)는 리포트 ID로 결과를 고르고 종합 등급·요약·체크리스트·역량·강점·우려·질문을 표시합니다. `reportId` URL 선택을 우선하며 `resumeId`도 호환합니다.
 
-분석 1회 비용은 100 크레딧입니다. 활성 구독 계정은 계정 크레딧을 차감하지 않으며, API 키 호출은 해당 키의 `credit_limit`에서 차감합니다. 실패하면 서버가 차감분을 환불합니다.
+`user_feedback`과 `review_text`는 리포트 평가와 메모입니다. `Resume.reviewed`와는 별도 필드이므로 메모 저장이 지원서의 검토 완료 상태를 자동으로 변경한다고 설명하지 않습니다. 현재 지원서 수정 API는 `reviewed`와 `reviewed_at`을 차단합니다.
 
-프론트:
+면접 질문은 리포트의 `{question,answer,purpose}` 배열입니다. 별도 질문 수정·삭제 API는 없고 처리 중 리포트의 수정·삭제는 거부됩니다.
 
-- `apiClient.requestResumeAnalysisById(resumeId)` (및 deprecated JD 기반 helper)
+## 템플릿 미리보기
 
-백엔드 계약:
-
-- `POST /api/resume/analyze/` with `{ id: resumeId }`
-- 응답 `data`는 `AnalysisReport.to_dict()` (면접 질문은 `interview_question` 필드)
-
-프론트 처리:
-
-- `resumeReportClient.ts`는 `resume/get`으로 대상 지원서를 확인한 뒤 `resume/analyze`를 호출합니다.
-- 반환된 `AnalysisReport`는 화면에서 쓰기 쉽도록 `report`와 `questions` 형태로 포장됩니다. 근거: `frontend/src/api/clients/resumeReportClient.ts`, `backend/api/urls.py`
-
-백엔드 구현:
-
-- `resume_analyze` in `backend/api/views/resume_endpoints.py`
-- `_get_analysis_resume()`
-- `is_celery_worker_available()`
-- `enqueue_report_analyze.delay(report.id)` 또는 동기 fallback `analyze_and_save_report(report.id)`
-- `report_service.invoke()` in `backend/api/tasks.py`
-
-## 분석 결과 조회 화면
-
-화면: `/analysis-report` (nav: 리포트 / 질문 추천)
-
-파일:
-
-- `frontend/src/pages/AnalysisReportPage.tsx`
-- `frontend/src/hooks/useAnalysisReportPageData.ts`
-- `frontend/src/components/analysis-report/`
-
-역할:
-
-- 저장된 `AnalysisReport`와 연결 resume·JD를 목록으로 표시
-- `?reportId=` 쿼리로 선택 리포트를 유지하고, 기존 링크 호환을 위해 `?resumeId=`도 지원 (`useSearchParams`)
-- 리포트 탭 내용과 추천 질문 패널 표시
-- 완료된 리포트 수정과 삭제 (`report/modify`, 삭제 시 `{id, delete:true}`)
-- `onqueue` 또는 `processing` 리포트는 대기 화면을 표시하고, `processing` 상태의 수정·삭제는 backend가 거부
-
-## 분석 결과 데이터
-
-저장 모델:
-
-- `AnalysisReport` (`interview_question` JSON 필드에 면접 질문 포함)
-- `AnalysisReport.status`: `onqueue`, `processing`, `done`, `fail`
-
-프론트 표시:
-
-- `mapAnalysisReport()`가 리포트 탭을 생성합니다.
-- `exampleQuestions`는 `report.interview_question`에서 생성된 `InterviewQuestion[]` 배열을 `resume_id`로 필터링합니다.
-- `mapTemplateQuestions()`가 면접 질문을 문항/가이드로 변환합니다.
-
-근거: `frontend/src/api/adapters.ts`, `backend/api/models.py`
-
-완료된 리포트 화면은 `user_feedback`(평가)과 `review_text`(검토 메모)를 `POST /api/report/modify/`로 저장하며 `version`도 표시합니다. 근거: `frontend/src/pages/AnalysisReportPage.tsx`, `backend/api/models.py`
-
-## 자기소개서 포맷 작성 (후순위 MVP)
-
-화면: `/cover-letter-template` (nav 숨김, `mvpStatus: 'planned'`)
-
-파일:
-
-- `frontend/src/pages/CoverLetterTemplatePage.tsx`
-
-역할:
-
-- 선택된 JD 요약 표시
-- 생성된 면접 질문을 문항과 작성 가이드처럼 표시
-- 문항 생성과 문서 다운로드 버튼 제공
-
-현재 문항 생성과 문서 다운로드 버튼은 disabled 상태이며 준비 중 tooltip을 표시합니다. 대응 backend endpoint와 `apiClient` 메서드는 없습니다. 근거: `frontend/src/pages/CoverLetterTemplatePage.tsx`
-
-## 관련 문서
-
-- [분석 파이프라인](../04-backend/analysis-pipeline.md)
-- [프론트 API ID 매핑](../06-api/frontend-api-id-map.md)
-- [모델 파이프라인](../07-ai-modeling/model-pipeline.md)
+[CoverLetterTemplatePage](../../frontend/src/pages/CoverLetterTemplatePage.tsx)는 질문 기반 가이드를 보여주는 숨긴 화면입니다. 문항 생성과 문서 다운로드는 비활성입니다. 학습·생성 결과의 해석은 [오프라인 평가](../07-ai-modeling/offline-evaluation.md)를 함께 읽습니다.

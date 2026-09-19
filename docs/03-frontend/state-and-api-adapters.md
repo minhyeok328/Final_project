@@ -1,111 +1,34 @@
 # 상태와 API 어댑터
 
-## 전역 화면 상태 (`App.tsx`)
+## 상태 소유 위치
 
-`frontend/src/App.tsx`는 라우팅, 인증 가드, 테마, 전역 알림·로딩만 담당합니다.
+| 상태 | 구현 |
+| --- | --- |
+| 인증 모드와 세션 수명 | [useAuthSession](../../frontend/src/hooks/useAuthSession.ts), [AuthSessionProvider](../../frontend/src/hooks/AuthSessionProvider.tsx) |
+| 앱 서버 데이터 | [useAppDataQuery](../../frontend/src/hooks/useAppDataQuery.ts), [queryOptions](../../frontend/src/api/queryOptions.ts) |
+| JD·지원서·리포트 선택 | `useJdPageData`, `useCoverLetterPageData`, `useAnalysisReportPageData` |
+| 저장·삭제·분석 | [mutation hooks](../../frontend/src/hooks/mutations/) |
+| FAB·전체 화면 대화 | [useDocumentChatState](../../frontend/src/hooks/useDocumentChatState.ts) |
+| 공유 조회와 요청 취소 | [useSharedReportSession](../../frontend/src/hooks/useSharedReportSession.ts) |
 
-- `mode`: light/dark 테마
-- `alert`, `loadingKey`: `useApiAction()` — 전역 토스트와 중복 액션 방지
-- `resetStep`: 비밀번호 재설정 단계
-- `authChecked`, `isAuthenticated`, `authMode`, `apiKey`: `useAuthSession()` — 세션 또는 API Key 접근 확인
+인증 모드와 임의 세션 식별자를 query key에 포함합니다. API Key 원문을 캐시 이름에 포함하지 않습니다. mutation 성공 후 관련 데이터를 무효화하며 진행 중 분석이 있으면 3초마다 재조회합니다.
 
-도메인별 선택 상태, 채팅 입력, mutation 호출은 `App.tsx`에 두지 않습니다. `frontend/scripts/verify-state-management-refactor.mjs`가 이 분리를 정적으로 검증합니다.
+## API 경계
 
-## 페이지·도메인 훅
+[httpClient](../../frontend/src/api/httpClient.ts)는 `/api` 기준 Axios, `withCredentials`, CSRF 쿠키 발급과 `X-CSRFToken`, 명시적인 `apiKey` 옵션을 처리합니다. HTTP 상태뿐 아니라 응답의 `error`도 검사합니다. 인증 만료를 감지하면 요청 중단과 세션 복구 흐름으로 연결합니다.
 
-각 화면은 `useAppDataQuery()` 캐시에서 필요한 slice를 고르고, 로컬 UI 상태는 전용 훅이 관리합니다.
+[도메인 client](../../frontend/src/api/clients/)는 요청 필드·경로를 지정하고 [Zod 스키마](../../frontend/src/api/backendSchemas.ts)로 결과를 파싱합니다. `getReportsForResumeRaw()`는 서버의 리포트 배열을 그대로 검증합니다. 형식 불일치를 빈 배열로 바꾸는 fallback으로 문서화하지 않습니다.
 
-| 훅 | 파일 | 역할 |
-| --- | --- | --- |
-| `useAppData` | `frontend/src/hooks/useAppData.ts` | 인증 후 초기 `AppData` 로딩 (`loading`, `error`, `reload`) |
-| `useAppDataQuery` | `frontend/src/hooks/useAppDataQuery.ts` | TanStack Query 래퍼, `appDataQueryOptions` 연결 |
-| `useJdPageData` | `frontend/src/hooks/useJdPageData.ts` | JD 목록·선택 JD (`selectedJdIdOverride`) |
-| `useCoverLetterPageData` | `frontend/src/hooks/useCoverLetterPageData.ts` | 지원서 행, JD·지원서 선택 (`selectedJdId`, `selectedResumeId`) |
-| `useAnalysisReportPageData` | `frontend/src/hooks/useAnalysisReportPageData.ts` | 리포트 목록, `?reportId=` URL 선택과 `?resumeId=` 레거시 선택 |
-| `useChatPageData` | `frontend/src/hooks/useChatPageData.ts` | 채팅 컨텍스트용 리포트·JD·질문 slice |
-| `useAdminPageData` | `frontend/src/hooks/useAdminPageData.ts` | 관리자 요약, AuthKey 목록 |
-| `DocumentChatProvider` / `useDocumentChatState` | `frontend/src/hooks/useDocumentChatState.ts` | FAB·`/chat` 공유 채팅 메시지·입력·전송 |
+[dashboardSource](../../frontend/src/api/services/dashboardSource.ts)가 여러 도메인 응답을 합치고 [appDataService](../../frontend/src/api/appDataService.ts)가 adapter로 화면 모델을 조립합니다. API Key 모드의 계정·회사 표시값 중 일부는 제한 모드용 기본값이며 실제 계정 조회 응답이 아닙니다.
 
-mutation 훅 (`frontend/src/hooks/mutations/`):
+## 변환 규칙
 
-- `useJdMutations` — JD 추가·수정·삭제·분석 요청
-- `useResumeMutations` — 지원서 CRUD·분석 요청
-- `useAdminMutations` — AuthKey CRUD
-- `useMutationHelpers` — `useInvalidateAppData()`로 mutation 후 캐시 무효화
+- `self_intoduction`은 backend 실제 필드명입니다.
+- 면접 질문은 `AnalysisReport.interview_question`에서 추출합니다. 별도 question API를 호출하지 않습니다.
+- 클라이언트 메시지의 `assistant`는 전송 시 `agent`로 바꿉니다.
+- 리포트 삭제는 `report/modify`에 `{id, delete:true}`를 보냅니다.
+- `onqueue`/`processing`은 대기·작업 상태이며 `error:false`만으로 완료를 표시하지 않습니다.
 
-`AdminPage`의 `createdAuthKey`처럼 화면 전용 일시 상태는 해당 페이지 `useState`로 유지합니다. 근거: `frontend/src/pages/AdminPage.tsx`
+## 경합과 오류
 
-## 데이터 로딩
-
-```mermaid
-flowchart TD
-  Hook["useAppData"] --> Query["useAppDataQuery"]
-  Query --> Options["appDataQueryOptions"]
-  Options --> Load["loadAppData"]
-  Load --> Client["apiClient"]
-  Load --> Adapters["mapDashboard, mapAdmin, mapCompany..."]
-  Pages["useJdPageData, useCoverLetterPageData..."] --> Query
-```
-
-근거:
-
-- `frontend/src/hooks/useAppData.ts`
-- `frontend/src/hooks/useAppDataQuery.ts`
-- `frontend/src/api/queryOptions.ts`
-- `frontend/src/api/appDataService.ts`
-- `frontend/src/api/adapters.ts`
-
-인증 라우트(`/login`, `/signup`, `/password-reset`)와 공유 화면(`/shared`)에서는 `useAppData(false)`로 대시보드 로딩을 건너뜁니다.
-
-API Key 모드에서는 `appDataQueryOptions()`가 query key에 `authMode`와 API key fingerprint를 포함하고 `loadApiKeyAppData(apiKey)`를 호출합니다. 일반 세션 모드는 `loadAppData()`를 사용합니다.
-
-`queryOptions.ts`는 `AnalysisReport.status` 또는 JD `checklistStatus`가 `onqueue`/`processing`인 항목이 있으면 3초 간격(`ACTIVE_ANALYSIS_REFETCH_INTERVAL_MS = 3000`)으로 `appData`를 재조회합니다.
-
-## API 클라이언트
-
-`frontend/src/api/backendClient.ts`는 공개 `apiClient` 객체만 조립하는 호환 façade입니다. 실제 endpoint·파싱 로직은 `frontend/src/api/clients/`, Axios·CSRF·인증 만료 처리는 `frontend/src/api/httpClient.ts`, 대시보드 다중 요청 조합은 `frontend/src/api/services/dashboardSource.ts`에 있습니다.
-
-중요 구현:
-
-- Axios `baseURL: '/api'`, `withCredentials: true`
-- POST 전에 CSRF 쿠키가 없으면 `/api/csrf/`를 호출합니다.
-- `X-API-Key`는 `requestBackend()` / `requestAction()` 호출 시 `{ apiKey }` 옵션을 넘긴 경우에만 붙습니다. `VITE_API_KEY` 환경 변수는 현재 `httpClient.ts`에서 읽지 않습니다. 근거: `frontend/src/api/httpClient.ts`, `frontend/src/api/httpClient.test.ts`
-- Django 응답이 `{ error, data, message }` 형태가 아니어도 `normalizePayload()`로 감쌉니다.
-- `getDashboard()`는 `dashboardSource.ts`에서 account/company/JD를 먼저 병렬 조회하고, JD별 resume와 resume별 report를 조합합니다. 면접 질문은 백엔드의 `report.interview_question`에서 `clientCore.ts`의 `getReportQuestions()`로 변환합니다.
-- `getApiKeyDashboard()`는 API Key가 접근 가능한 JD/resume/report만 조합하고 계정·회사 정보는 제한 모드용 기본값을 사용합니다.
-- backend API가 없는 후순위 기능은 페이지 버튼을 disabled 처리하고 준비 중 tooltip을 표시합니다. 대응 `apiClient` 메서드는 없습니다.
-- 주요 엔티티 응답은 `frontend/src/api/backendSchemas.ts`의 Zod 스키마(`parseAccount`, `parseResumes` 등)로 런타임 검증합니다.
-
-## 응답 스키마 검증
-
-`frontend/src/api/backendSchemas.ts`는 Django `to_dict()` shape에 맞춘 Zod 스키마를 정의합니다. `backendTypes.ts`의 TypeScript 타입과 `satisfies z.ZodType<...>`로 정합성을 맞춥니다.
-
-- `accountSchema`, `companyInfoSchema`, `authKeySchema`, `jobDescriptionSchema`, `resumeSchema`, `analysisReportSchema`, `interviewQuestionSchema`
-- `parse*` 헬퍼는 `clients/`의 도메인 클라이언트에서 API 응답 파싱에 사용합니다.
-- 단위 테스트: `frontend/src/api/backendSchemas.test.ts`
-
-## 어댑터 역할
-
-`frontend/src/api/adapters/`는 API 스키마를 화면별 모델로 바꿉니다. `adapters.ts`는 `admin`, `common`, `dashboard`, `jd`, `recruitment`, `report`, `resume`, `types`, `user` 모듈을 re-export하는 façade입니다.
-
-- `mapDashboard`: metrics, applicants, insightCards, tasks, creditPercent 생성
-- `mapAdmin`: 관리자 요약, 멤버, 권한, 운영 상태 생성
-- `mapCompany`: 회사 정보 완성도 계산
-- `mapJdList`: JD 목록 표시 모델과 평균 적합도 생성
-- `mapCoverLetterRows`: 지원서 테이블 행 생성
-- `mapAnalysisReport`: 리포트 탭, 예시 질문 생성. `chatMessages` 필드는 view model에 포함되지만 문서 채팅 state(`useDocumentChatState`)에는 연결되지 않습니다.
-- `mapTemplateQuestions`: 면접 질문을 자기소개서 문항 가이드로 변환
-- `mapUserProfile`: 계정 정보를 마이페이지 표시 모델로 변환
-
-## 실제 API 연동 시 주의점
-
-- `apiClient.requestResumeAnalysisById()`는 resume id로 분석을 요청하고 `resume/analyze/`를 호출합니다.
-- 프론트 `assistant` role은 `/api/chat/` 요청 전 `agent`로 변환합니다.
-- `account/modify` payload에서 `id`, `username`, `account_hash`는 제거합니다.
-
-## 관련 문서
-
-- [API 레퍼런스](../06-api/api-reference.md)
-- [프론트 API ID 매핑](../06-api/frontend-api-id-map.md)
-- [데이터 흐름](../02-architecture/data-flow.md)
-- [프론트엔드 운영·검증 가이드](../../frontend/README.md)
+채팅·공유 hook에는 AbortController와 요청 식별자를 활용한 이전 응답 배제 흐름이 있습니다. 로그아웃·인증 전환 시 요청과 캐시를 정리합니다. 입력 내용과 선택 상태가 오류 후 유지되는지는 [수동 검증](../10-quality/manual-acceptance.md)과 해당 hook 테스트에서 확인합니다.

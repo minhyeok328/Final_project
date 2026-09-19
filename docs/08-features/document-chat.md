@@ -1,77 +1,25 @@
 # 문서 검색 채팅
 
-## 화면 형태
+## 화면과 상태
 
-문서 검색 채팅은 두 형태가 있습니다.
+[ChatPage](../../frontend/src/pages/ChatPage.tsx)와 [DocumentChatFab](../../frontend/src/components/chat/DocumentChatFab.tsx)은 [useDocumentChatState](../../frontend/src/hooks/useDocumentChatState.ts)의 대화 상태를 공유합니다. 페이지를 옮겨도 Provider가 유지되는 동안 대화가 이어지며 서버의 영구 대화 테이블에 저장하는 구조는 아닙니다.
 
-1. 전역 플로팅 위젯: `DocumentChatFab`
-2. 전체 화면: `/chat`, `ChatPage`
+JD·리포트·질문 참조 자료와 추천 질문은 [chatContextData](../../frontend/src/components/chat/chatContextData.tsx)가 조합합니다. FAB의 범위 선택은 화면 자료 필터이며 그 자체로 서버 권한을 바꾸지 않습니다.
 
-근거:
+## 요청 계약
 
-- `frontend/src/components/chat/DocumentChatFab.tsx`
-- `frontend/src/pages/ChatPage.tsx`
+[chatClient](../../frontend/src/api/clients/chatClient.ts)는 `{role,message}` 배열을 전송합니다. 프론트 `assistant`는 백엔드 `agent`로 변환합니다. [view](../../backend/api/views/chat_endpoints.py)는 배열·객체·role·문자열을 검사한 후 사용자의 접근 범위와 검색 함수를 그래프에 전달합니다.
 
-## 공유 상태
+[chat_graph](../../backend/common/chat_graph.py)는 의도를 분류해 HR 데이터와 앱 사용 설명서 분기로 보내고 결과를 합칩니다. [chat_agent](../../backend/common/chat_agent.py)의 `search_recruiting_data` tool은 구조화 필터로 업무 데이터를 조회하고, 매뉴얼 branch는 Pinecone `user_manual`의 문서를 사용합니다.
 
-`App.tsx`의 `DocumentChatProvider`(`frontend/src/hooks/useDocumentChatState.ts`)가 `chatMessages`, `chatInput`, `sendChatMessage()`, `resetChatMessages()`를 관리합니다. `/chat` 화면과 FAB 위젯은 `useDocumentChatState()`로 같은 컨텍스트를 읽으므로 대화 내용이 이어집니다.
+## 데이터 범위
 
-채팅 메시지 state는 빈 배열로 시작합니다. `ChatPage`의 "대화 초기화" 버튼이 `resetChatMessages()`를 호출합니다. 근거: `frontend/src/hooks/useDocumentChatState.ts`, `frontend/src/pages/ChatPage.tsx`
+HR 검색 결과는 DB의 회사·JD·지원서·리포트입니다. 이름에 `masked`가 있는 직렬화 함수만으로 실제 개인정보가 마스킹되었다고 가정하면 안 됩니다. [utils](../../backend/api/views/utils.py)의 필드 선택과 [분석 마스킹](../07-ai-modeling/model-pipeline.md)은 서로 다른 처리입니다.
 
-UI 안내 문구는 state와 분리되어 있습니다.
+API Key 공유 채팅은 허용 지원서 범위를 기반으로 동작합니다. 서버 검색 범위와 화면 참조 자료가 같은 제한을 적용하는지 별도 계정·키로 확인합니다.
 
-- FAB: `DocumentChatFab`가 첫 번째 버블에 고정 intro 문구를 렌더링합니다.
-- `/chat`: `ChatWindowPanel`이 메시지가 없을 때 empty state와 `suggestedQuestions`를 표시합니다. 추천 질문은 `ChatPage`가 `jdList` 첫 항목을 기준으로 생성합니다.
+## 오류와 확인
 
-`mapAnalysisReport()`의 `chatMessages` 필드는 `AppData.analysisReport` view model에 남아 있지만, `DocumentChatProvider`에는 연결되지 않습니다. 근거: `frontend/src/api/adapters.ts`, `frontend/src/api/appDataService.ts`
+빈 메시지를 막고, 취소·초기화 후 이전 응답이 대화를 덮지 않도록 요청 수명을 관리합니다. 매뉴얼 검색에는 OpenAI·Pinecone 설정이 필요합니다. 일반 채팅의 의도 분류 성능과 실제 답변의 정확성은 구분합니다.
 
-## 참조 데이터·추천 패널
-
-FAB와 `/chat` 왼쪽 패널은 `useChatPageData()`로 JD·지원서·리포트·면접 질문 slice를 읽고, `frontend/src/components/chat/chatContextData.tsx`의 `buildChatContextData()`로 추천 자료·빠른 질문을 조합합니다.
-
-FAB의 검색 범위 칩은 `chatScopeOptions` 기준이며 라벨은 `전체`, `JD`, `분석 리포트`, `면접 질문`, `사용 가이드`입니다. `DocumentChatFab` 내부 `scope` state로 필터링합니다. 근거: `frontend/src/components/chat/chatContextData.tsx`, `frontend/src/components/chat/DocumentChatFab.tsx`
-
-## 프론트 전송
-
-`sendChatMessage()`:
-
-1. 빈 메시지를 막습니다.
-2. 현재 메시지 목록에 user 메시지를 추가합니다.
-3. `apiClient.sendChatMessage(trimmed, nextChatMessages)`를 호출합니다.
-4. 응답 메시지를 채팅 목록에 추가합니다.
-
-실제 API 모드에서는 프론트 `assistant` role을 백엔드 `agent` role로 변환합니다. 근거: `frontend/src/api/clients/chatClient.ts`
-
-## 백엔드 처리
-
-엔드포인트: `/api/chat/`
-
-`backend/api/views/chat_endpoints.py`:
-
-- `chat` 배열 형식 검증
-- 사용자 또는 API 키로 접근 가능한 JD 후보 조회
-- `invoke_graph()` 호출
-
-`backend/common/chat_graph.py`:
-
-- 의도 분류
-- HR 데이터 분석 branch와 앱 매뉴얼 branch를 조건부 fan-out
-- 앱 매뉴얼 RAG branch
-- 두 결과를 받는 최종 요약 fan-in
-
-`backend/common/chat_agent.py`:
-
-- `FallCaseStructure`: 범위 밖/HR 데이터/앱 매뉴얼 분류
-- `ContextExtractorStructure`: 이전 대화 수치/값 추출
-- `search_recruiting_data`: 회사·JD·지원서·리포트 필터를 구조화해 권한 범위에서 조회하는 LLM tool(최대 3회 tool round)
-- `search_app_manual()`: Pinecone 검색
-- `invoke_summary_agent()`: 답변 병합
-
-## QA
-
-문서 검색 FAB는 `frontend/scripts/verify-document-chat-widget.mjs`로 데스크톱/모바일 위치, 추천 패널, 스크롤 모델, 오버플로우를 검증합니다.
-
-## 관련 문서
-
-- [검색과 저장소](../07-ai-modeling/retrieval-and-storage.md)
-- [데이터 흐름](../02-architecture/data-flow.md)
+[FAB 검증 스크립트](../../frontend/scripts/verify-document-chat-widget.mjs)는 패널·스크롤·뷰포트를 확인합니다. 모델 호출을 포함하는 확인은 [품질 문서](../10-quality/verification-and-limitations.md)의 별도 조건을 따릅니다.

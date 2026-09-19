@@ -1,178 +1,61 @@
-# 배포와 인프라
+# 배포
 
-## 배포 대상
+저장소에는 프론트·백엔드를 서로 다른 EC2에 배포하는 설정이 있습니다. 이 문서는 구성된 절차를 설명하며 현재 서버·도메인·RunPod endpoint의 가동 상태를 확인한 결과는 아닙니다.
 
-프로젝트는 프론트엔드와 백엔드를 분리해 EC2에 배포합니다.
+## 구성과 사전 조건
 
-- 프론트엔드: GitHub Actions에서 `frontend/dist`를 빌드한 뒤 S3에 업로드하고, SSM으로 프론트 EC2의 `/var/www/app/frontend`에 동기화합니다.
-- 백엔드: GitHub Actions에서 `backend/` 소스를 S3에 업로드하고, SSM으로 백엔드 EC2의 `/var/www/app/backend`에 동기화합니다.
-- nginx와 systemd 설정은 `.deploy/` 파일을 S3에 올린 뒤 각 EC2에 설치합니다.
+[deploy.yml](../../.github/workflows/deploy.yml)은 `dev` 브랜치의 지정 경로 push 또는 수동 실행으로 동작합니다. 프론트·백엔드 job은 각각 S3 artifact와 SSM 명령을 사용합니다. 같은 ref의 이전 배포를 취소하는 concurrency 설정이 있습니다.
 
-근거:
+AWS 계정·S3 bucket·대상 EC2·SSM 연결·IAM 권한·서버 네트워크는 미리 준비해야 합니다. 이 워크플로는 인프라 전체를 생성하는 IaC가 아닙니다.
 
-- `.github/workflows/deploy.yml`
-- `.deploy/frontend.conf`
-- `.deploy/backend.conf`
-- `.deploy/gunicorn.service`
-- `.deploy/celery.service`
+워크플로 secret 이름은 `AWS_ACCESS_KEY_ID`, `AWS_ACCESS_KEY`, `AWS_ACCESS_REGION`, `S3_DEPLOY_BUCKET`, `AWS_FRONTEND_INSTANCE_ID`, `AWS_BACKEND_INSTANCE_ID`입니다. 실제 값은 문서나 저장소에 넣지 않습니다.
 
-## GitHub Actions
+## 프론트 배포
 
-워크플로: `.github/workflows/deploy.yml`
+Node 20에서 `npm ci`, `npm run build`를 실행해 `frontend/dist`를 S3에 올립니다. SSM이 `/var/www/app/frontend`로 동기화하고 [frontend.conf](../../.deploy/frontend.conf)를 설치한 뒤 `nginx -t`와 reload를 수행합니다.
 
-트리거:
-
-- `dev` 브랜치 push
-- `workflow_dispatch`
-
-감시 경로:
-
-- `frontend/**`
-- `backend/**`
-- `.deploy/frontend.conf`
-- `.deploy/backend.conf`
-- `.deploy/gunicorn.service`
-- `.deploy/celery.service`
-- `.github/workflows/deploy.yml`
-
-동시성:
-
-- `deploy-${{ github.ref }}` 그룹으로 같은 ref의 이전 배포를 취소합니다.
-
-## 프론트엔드 배포
-
-작업: `deploy-frontend`
-
-순서:
-
-1. checkout
-2. Node.js 20 설정
-3. `frontend`에서 `npm ci`
-4. `frontend`에서 `npm run build`
-5. AWS 인증 설정
-6. `frontend/dist`를 `s3://${S3_DEPLOY_BUCKET}/frontend/`로 sync
-7. `.deploy/frontend.conf`를 `s3://${S3_DEPLOY_BUCKET}/nginx/frontend.conf`로 업로드
-8. SSM `AWS-RunShellScript`로 프론트 EC2에 배포 명령 실행
-9. SSM 결과 조회 후 성공 여부 확인
-
-프론트 EC2에서 수행하는 주요 작업:
-
-- `/var/www/app/frontend` 생성
-- S3의 프론트 빌드 파일을 `/var/www/app/frontend/`로 sync
-- nginx 설정을 `/etc/nginx/conf.d/frontend.conf`에 복사
-- `nginx -t`
-- `systemctl enable nginx`
-- `systemctl reload-or-restart nginx`
-
-## 프론트 nginx
-
-`.deploy/frontend.conf`:
-
-- `root /var/www/app/frontend`
-- `index index.html`
-- `/api/` 요청을 `http://10.0.94.7`의 백엔드로 proxy하고 `Host`, `X-Real-IP`, `X-Forwarded-For`, `X-Forwarded-Proto` 헤더를 전달합니다.
-- `/api/` proxy의 `proxy_read_timeout`, `proxy_send_timeout`은 각각 180초입니다.
-- 모든 경로를 `try_files $uri $uri/ /index.html`로 처리해 SPA 라우팅을 지원합니다.
+정적 경로는 `index.html` fallback을 사용합니다. `/api/`는 설정 파일에 고정된 백엔드 사설 주소로 전달하며 read/send timeout은 180초입니다. 새 환경에서는 사설 upstream 주소가 맞는지 확인해야 합니다. `VITE_API_PROXY_TARGET`은 개발 서버 설정이므로 운영 Nginx를 바꾸지 않습니다.
 
 ## 백엔드 배포
 
-작업: `deploy-backend`
+backend 소스와 [Nginx](../../.deploy/backend.conf), [Gunicorn unit](../../.deploy/gunicorn.service), [Celery unit](../../.deploy/celery.service)을 S3·SSM으로 설치합니다. 소스 업로드에서 `.venv`, 캐시, SQLite DB, `.env`를 제외합니다.
 
-순서:
+서버에서는 Python 3.14 가상환경·requirements 설치, Django `check`, `migrate`, `collectstatic`, Valkey·Celery·Gunicorn·Nginx 재시작을 수행합니다. 마지막 확인은 로컬 `/api/ping/` 요청입니다. Django 테스트, 프론트 lint·Vitest·브라우저 테스트를 배포 gate로 실행하는 구성은 아닙니다.
 
-1. checkout
-2. AWS 인증 설정
-3. `backend/`를 `s3://${S3_DEPLOY_BUCKET}/backend/`로 sync
-4. `.deploy/backend.conf`를 S3 nginx 경로에 업로드
-5. `.deploy/gunicorn.service`, `.deploy/celery.service`를 S3 systemd 경로에 업로드
-6. SSM으로 백엔드 EC2에 소스 동기화
-7. SSM으로 nginx/systemd 설정 설치
-8. EC2에서 Python 가상환경과 `backend/requirements.txt` 설치
-9. EC2에서 `python manage.py check`
-10. EC2에서 `python manage.py migrate`
-11. EC2에서 `python manage.py collectstatic --noinput`
-12. Valkey와 Celery 재시작
-13. Gunicorn 재시작
-14. nginx reload
-15. `curl -f http://127.0.0.1/api/ping/` 헬스 체크
+## 프로세스와 환경
 
-백엔드 S3 업로드 제외 항목:
+| 대상 | 설정 |
+| --- | --- |
+| Gunicorn | `myapp-gunicorn`, worker 3, `127.0.0.1:8000`, timeout 120초 |
+| Celery | `myapp-celery`, `celery -A config worker --loglevel=info`, `valkey.service` 의존 |
+| 작업 경로 | `/var/www/app/backend` |
+| 환경 파일 | `/etc/secrets.env` |
+| 백엔드 Nginx | localhost 8000 프록시, read/send 150초, body 20M |
 
-- `.venv/*`
-- `__pycache__/*`
-- `*.pyc`
-- `db.sqlite3`
-- `.env`
+[환경 변수](../01-getting-started/development-environment.md)를 Gunicorn과 Celery에 동일하게 공급합니다. `IS_REMOTE_HOST`가 설정되면 RDS 연결을 사용합니다. 현재 설정 파일 자체는 HTTP 80을 수신하므로 외부 TLS 종료와 쿠키 secure 정책은 실제 인프라에서 별도 확인해야 합니다.
 
-## 백엔드 nginx
+## 점검과 장애 대응
 
-`.deploy/backend.conf`:
+운영 호스트의 읽기 점검 예시:
 
-- `client_max_body_size 20M`
-- 모든 요청을 `http://127.0.0.1:8000`으로 proxy합니다.
-- `Host`, `X-Real-IP`, `X-Forwarded-For`, `X-Forwarded-Proto` 헤더를 전달합니다.
-- `proxy_read_timeout`, `proxy_send_timeout`은 각각 150초입니다.
+```bash
+systemctl status myapp-gunicorn myapp-celery valkey nginx --no-pager
+journalctl -u myapp-gunicorn -n 100 --no-pager
+journalctl -u myapp-celery -n 100 --no-pager
+curl -f http://127.0.0.1/api/ping/
+```
 
-## Gunicorn
+ping 성공은 DB·OpenAI·Pinecone·RunPod 전체 정상 여부를 확인하지 않습니다. 분석 지연은 작업 상태와 worker 로그를 함께 확인합니다. 동기 분석에서는 RunPod 600초 timeout보다 Gunicorn 120초가 짧아 요청이 먼저 중단될 수 있습니다.
 
-`.deploy/gunicorn.service`:
+소스 sync와 migration은 운영 상태를 바꿉니다. 워크플로에는 자동 DB 백업·schema rollback·무중단 전환이 없으므로 배포 전 복구 가능한 DB 백업과 이전 artifact를 준비해야 합니다. 이 저장소 설정만으로 복구 가능성을 검증한 것은 아닙니다.
 
-- systemd service 이름은 배포 중 `/etc/systemd/system/myapp-gunicorn.service`로 설치됩니다.
-- `User=ec2-user`, `Group=nginx`
-- `WorkingDirectory=/var/www/app/backend`
-- `EnvironmentFile=/etc/secrets.env`
-- 가상환경 경로: `/var/www/app/backend/.venv/bin`
-- 실행 명령: `gunicorn --workers 3 --bind 127.0.0.1:8000 --timeout 120 config.wsgi:application`
+## RunPod 별도 배포
 
-## Celery와 Valkey
+GPU handler는 웹 EC2 workflow에서 배포하지 않습니다. 컨테이너의 build context는 `runpod/`입니다.
 
-`.deploy/celery.service`:
+```bash
+docker build -f runpod/masking_docker -t humour-masking:local runpod
+docker build -f runpod/star_docker -t humour-star:local runpod
+```
 
-- systemd service 이름은 배포 중 `/etc/systemd/system/myapp-celery.service`로 설치됩니다.
-- `Requires=valkey.service`
-- `DJANGO_SETTINGS_MODULE=config.settings`
-- `EnvironmentFile=/etc/secrets.env`
-- 실행 명령: `celery -A config worker --loglevel=info`
-
-배포 워크플로는 `systemctl enable --now valkey` 후 `myapp-celery`를 재시작하고 활성 상태를 확인합니다.
-
-## 운영 환경 변수
-
-백엔드는 `/etc/secrets.env`를 systemd와 SSM 명령에서 읽습니다.
-
-주요 변수:
-
-- `IS_REMOTE_HOST`
-- `DJANGO_SECRET_KEY`
-- `DJANGO_DEBUG`
-- `DJANGO_ALLOWED_HOSTS`
-- `DJANGO_CORS_ALLOWED_ORIGINS`
-- `DJANGO_CSRF_TRUSTED_ORIGINS`
-- `DJANGO_CSRF_COOKIE_SECURE`
-- `DJANGO_SESSION_COOKIE_SECURE`
-- `RDS_HOSTNAME`, `RDS_PORT`, `RDS_USERNAME`, `RDS_PASSWORD`, `RDS_DB_NAME`
-- `OPENAI_API_KEY`
-- `PINECONE_API_KEY`, `PINECONE_HOST`
-- `RUNPOD_API_KEY`, `RUNPOD_MASKING_ENDPOINT_ID`, `RUNPOD_STAR_ENDPOINT_ID`
-
-프론트 빌드:
-
-- 현재 필수 Vite 환경 변수는 없습니다. API 키는 빌드 시 주입하지 않고, `/shared` 화면에서 사용자 입력값을 요청마다 `{ apiKey }`로 전달합니다.
-- `frontend/.env.example`의 `VITE_USE_MOCK_API`는 현재 코드에서 참조하지 않습니다.
-- `VITE_API_PROXY_TARGET`은 개발 서버 전용 프록시 설정이며, 운영의 `/api/` 전달은 `.deploy/frontend.conf`가 담당합니다.
-
-## GitHub Secrets
-
-워크플로가 참조하는 secret:
-
-- `AWS_ACCESS_KEY_ID`
-- `AWS_ACCESS_KEY`
-- `AWS_ACCESS_REGION`
-- `S3_DEPLOY_BUCKET`
-- `AWS_FRONTEND_INSTANCE_ID`
-- `AWS_BACKEND_INSTANCE_ID`
-
-## 관련 문서
-
-- [실행과 운영](../01-getting-started/run-and-operations.md)
-- [시스템 아키텍처](../02-architecture/system-architecture.md)
+이미지 빌드에는 네트워크·컨테이너 환경이 필요하고 실제 추론에는 GPU와 모델 접근권한이 필요합니다. 레지스트리 push·RunPod endpoint 생성·API 변수 연결은 별도 구성입니다. 현재 가중치와 endpoint 이용 가능 여부는 확인하지 않았습니다.
