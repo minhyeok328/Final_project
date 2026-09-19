@@ -1,6 +1,7 @@
+import { fileURLToPath } from "node:url";
 import { FileBlob, SpreadsheetFile } from "@oai/artifact-tool";
 
-const outputPath = "C:\\MinHyeok\\skn26_final_1st\\Final_project\\outputs\\interface-definition\\HumouR_인터페이스정의서.xlsx";
+const outputPath = fileURLToPath(new URL("../../outputs/interface-definition/HumouR_인터페이스정의서.xlsx", import.meta.url));
 
 async function main() {
   const input = await FileBlob.load(outputPath);

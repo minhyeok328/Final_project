@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { FileBlob, SpreadsheetFile } from "@oai/artifact-tool";
 
-const inputPath = "C:\\Users\\MIN\\Downloads\\인터페이스정의서_템플릿.xlsx";
-const outputDir = "C:\\MinHyeok\\skn26_final_1st\\Final_project\\outputs\\interface-definition";
+const inputPath = path.resolve(process.argv[2] ?? "인터페이스정의서_템플릿.xlsx");
+const outputDir = fileURLToPath(new URL("../../outputs/interface-definition/", import.meta.url));
 const outputPath = path.join(outputDir, "HumouR_인터페이스정의서.xlsx");
 const previewDir = path.join(outputDir, "previews");
 const docName = "HumouR API 인터페이스 정의서";
@@ -317,8 +318,8 @@ const noMqRows = [
 ];
 
 const batchRows = [
-  ["BATCH-CRAWL", "채용공고 크롤러", "수동/필요 시", "-", "-", "database/crawling/*_scraper.py", "스크립트 재실행", "운영 정책", "데이터 담당", "현재 API 인터페이스와 분리"],
-  ["BATCH-EMBED", "문서 임베딩 업로드", "수동/필요 시", "-", "크롤링/문서 정제", "database/embedding/*.ipynb", "노트북 재실행", "운영 정책", "AI 담당", "Pinecone namespace 사용"],
+  ["BATCH-CRAWL", "채용공고 크롤러", "수동/필요 시", "-", "-", "data-pipeline/crawling/*_scraper.py", "스크립트 재실행", "운영 정책", "데이터 담당", "현재 API 인터페이스와 분리"],
+  ["BATCH-EMBED", "문서 임베딩 업로드", "수동/필요 시", "-", "크롤링/문서 정제", "data-pipeline/embedding/*.ipynb", "노트북 재실행", "운영 정책", "AI 담당", "Pinecone namespace 사용"],
 ];
 
 const approvalRows = [
